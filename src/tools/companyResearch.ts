@@ -4,15 +4,24 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
+import { handleRateLimitError } from "../utils/errorHandler.js";
 import { checkpoint } from "agnost";
 
-export function registerCompanyResearchTool(server: McpServer, config?: { exaApiKey?: string }): void {
+export function registerCompanyResearchTool(server: McpServer, config?: { exaApiKey?: string; userProvidedApiKey?: boolean }): void {
   server.tool(
     "company_research_exa",
-    "Research companies using Exa AI - finds comprehensive information about businesses, organizations, and corporations. Provides insights into company operations, news, financial information, and industry analysis.",
+    `Research any company to get business information, news, and insights.
+
+Best for: Learning about a company's products, services, recent news, or industry position.
+Returns: Company information from trusted business sources.`,
     {
       companyName: z.string().describe("Name of the company to research"),
-      numResults: z.number().optional().describe("Number of search results to return (default: 5)")
+      numResults: z.coerce.number().optional().describe("Number of search results to return (must be a number, default: 3)")
+    },
+    {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true
     },
     async ({ companyName, numResults }) => {
       const requestId = `company_research_exa-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -36,10 +45,12 @@ export function registerCompanyResearchTool(server: McpServer, config?: { exaApi
         const searchRequest: ExaSearchRequest = {
           query: `${companyName} company`,
           type: "auto",
-          numResults: numResults || 5,
+          numResults: numResults || 3,
           category: "company",
           contents: {
-            "text": true
+            text: {
+              maxCharacters: 7000
+            }
           }
         };
         
@@ -81,6 +92,12 @@ export function registerCompanyResearchTool(server: McpServer, config?: { exaApi
       } catch (error) {
         logger.error(error);
         
+        // Check for rate limit error on free MCP
+        const rateLimitResult = handleRateLimitError(error, config?.userProvidedApiKey, 'company_research_exa');
+        if (rateLimitResult) {
+          return rateLimitResult;
+        }
+        
         if (axios.isAxiosError(error)) {
           // Handle Axios errors specifically
           const statusCode = error.response?.status || 'unknown';
@@ -107,4 +124,4 @@ export function registerCompanyResearchTool(server: McpServer, config?: { exaApi
       }
     }
   );
-}  
+}                                                                                                

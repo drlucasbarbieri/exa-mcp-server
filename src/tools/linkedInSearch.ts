@@ -4,22 +4,27 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
+import { handleRateLimitError } from "../utils/errorHandler.js";
 import { checkpoint } from "agnost";
 
-export function registerLinkedInSearchTool(server: McpServer, config?: { exaApiKey?: string }): void {
+export function registerLinkedInSearchTool(server: McpServer, config?: { exaApiKey?: string; userProvidedApiKey?: boolean }): void {
   server.tool(
     "linkedin_search_exa",
-    "Search LinkedIn profiles and companies using Exa AI - finds professional profiles, company pages, and business-related content on LinkedIn. Useful for networking, recruitment, and business research.",
+    "⚠️ DEPRECATED: This tool is deprecated. Please use 'people_search_exa' instead. This tool will be removed in a future version. For now, it searches for people on LinkedIn using Exa AI - finds professional profiles and people.",
     {
-      query: z.string().describe("LinkedIn search query (e.g., person name, company, job title)"),
-      searchType: z.enum(["profiles", "companies", "all"]).optional().describe("Type of LinkedIn content to search (default: all)"),
-      numResults: z.number().optional().describe("Number of LinkedIn results to return (default: 5)")
+      query: z.string().describe("Search query for finding people on LinkedIn"),
+      numResults: z.coerce.number().optional().describe("Number of LinkedIn profile results to return (must be a number, default: 5)")
     },
-    async ({ query, searchType, numResults }) => {
+    {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true
+    },
+    async ({ query, numResults }) => {
       const requestId = `linkedin_search_exa-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       const logger = createRequestLogger(requestId, 'linkedin_search_exa');
       
-      logger.start(`${query} (${searchType || 'all'})`);
+      logger.start(`${query}`);
       
       try {
         // Create a fresh axios instance for each request
@@ -35,25 +40,18 @@ export function registerLinkedInSearchTool(server: McpServer, config?: { exaApiK
         });
 
         let searchQuery = query;
-        if (searchType === "profiles") {
-          searchQuery = `${query} LinkedIn profile`;
-        } else if (searchType === "companies") {
-          searchQuery = `${query} LinkedIn company`;
-        } else {
-          searchQuery = `${query} LinkedIn`;
-        }
+        searchQuery = `${query} LinkedIn profile`;
 
         const searchRequest: ExaSearchRequest = {
           query: searchQuery,
           type: "auto",
           numResults: numResults || API_CONFIG.DEFAULT_NUM_RESULTS,
+          category: "people",
           contents: {
             text: {
               maxCharacters: API_CONFIG.DEFAULT_MAX_CHARACTERS
             },
-            livecrawl: 'preferred'
           },
-          includeDomains: ["linkedin.com"]
         };
         
         checkpoint('linkedin_search_request_prepared');
@@ -74,17 +72,20 @@ export function registerLinkedInSearchTool(server: McpServer, config?: { exaApiK
           return {
             content: [{
               type: "text" as const,
-              text: "No LinkedIn content found. Please try a different query."
+              text: "No LinkedIn content found. Please try a different query. Note: This tool is deprecated - please use 'people_search_exa' instead."
             }]
           };
         }
 
         logger.log(`Found ${response.data.results.length} LinkedIn results`);
         
+        // Add deprecation notice to the response
+        const deprecationNotice = "\n\n⚠️ DEPRECATION NOTICE: This tool (linkedin_search_exa) is deprecated. Please use 'people_search_exa' instead for future requests.";
+        
         const result = {
           content: [{
             type: "text" as const,
-            text: JSON.stringify(response.data, null, 2)
+            text: JSON.stringify(response.data, null, 2) + deprecationNotice
           }]
         };
         
@@ -93,6 +94,12 @@ export function registerLinkedInSearchTool(server: McpServer, config?: { exaApiK
         return result;
       } catch (error) {
         logger.error(error);
+        
+        // Check for rate limit error on free MCP
+        const rateLimitResult = handleRateLimitError(error, config?.userProvidedApiKey, 'linkedin_search_exa');
+        if (rateLimitResult) {
+          return rateLimitResult;
+        }
         
         if (axios.isAxiosError(error)) {
           // Handle Axios errors specifically
@@ -103,7 +110,7 @@ export function registerLinkedInSearchTool(server: McpServer, config?: { exaApiK
           return {
             content: [{
               type: "text" as const,
-              text: `LinkedIn search error (${statusCode}): ${errorMessage}`
+              text: `LinkedIn search error (${statusCode}): ${errorMessage}\n\n⚠️ Note: This tool is deprecated. Please use 'people_search_exa' instead.`
             }],
             isError: true,
           };
@@ -113,11 +120,11 @@ export function registerLinkedInSearchTool(server: McpServer, config?: { exaApiK
         return {
           content: [{
             type: "text" as const,
-            text: `LinkedIn search error: ${error instanceof Error ? error.message : String(error)}`
+            text: `LinkedIn search error: ${error instanceof Error ? error.message : String(error)}\n\n⚠️ Note: This tool is deprecated. Please use 'people_search_exa' instead.`
           }],
           isError: true,
         };
       }
     }
   );
-}  
+}

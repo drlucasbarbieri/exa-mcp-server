@@ -3,15 +3,24 @@ import axios from "axios";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG } from "./config.js";
 import { createRequestLogger } from "../utils/logger.js";
+import { handleRateLimitError } from "../utils/errorHandler.js";
 import { checkpoint } from "agnost";
 
-export function registerCrawlingTool(server: McpServer, config?: { exaApiKey?: string }): void {
+export function registerCrawlingTool(server: McpServer, config?: { exaApiKey?: string; userProvidedApiKey?: boolean }): void {
   server.tool(
     "crawling_exa",
-    "Extract and crawl content from specific URLs using Exa AI - retrieves full text content, metadata, and structured information from web pages. Ideal for extracting detailed content from known URLs.",
+    `Get the full content of a specific webpage. Use when you have an exact URL.
+
+Best for: Extracting content from a known URL.
+Returns: Full text content and metadata from the page.`,
     {
       url: z.string().describe("URL to crawl and extract content from"),
-      maxCharacters: z.number().optional().describe("Maximum characters to extract (default: 3000)")
+      maxCharacters: z.coerce.number().optional().describe("Maximum characters to extract (must be a number, default: 3000)")
+    },
+    {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true
     },
     async ({ url, maxCharacters }) => {
       const requestId = `crawling_exa-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -80,6 +89,12 @@ export function registerCrawlingTool(server: McpServer, config?: { exaApiKey?: s
       } catch (error) {
         logger.error(error);
         
+        // Check for rate limit error on free MCP
+        const rateLimitResult = handleRateLimitError(error, config?.userProvidedApiKey, 'crawling_exa');
+        if (rateLimitResult) {
+          return rateLimitResult;
+        }
+        
         if (axios.isAxiosError(error)) {
           // Handle Axios errors specifically
           const statusCode = error.response?.status || 'unknown';
@@ -106,4 +121,4 @@ export function registerCrawlingTool(server: McpServer, config?: { exaApiKey?: s
       }
     }
   );
-}  
+}                                                                                                

@@ -4,18 +4,22 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
+import { handleRateLimitError } from "../utils/errorHandler.js";
 import { checkpoint } from "agnost"
 
-export function registerWebSearchTool(server: McpServer, config?: { exaApiKey?: string }): void {
+export function registerWebSearchTool(server: McpServer, config?: { exaApiKey?: string; userProvidedApiKey?: boolean }): void {
   server.tool(
     "web_search_exa",
-    "Search the web using Exa AI - performs real-time web searches and can scrape content from specific URLs. Supports configurable result counts and returns the content from the most relevant websites.",
+    `Search the web for any topic and get clean, ready-to-use content.
+
+Best for: Finding current information, news, facts, or answering questions about any topic.
+Returns: Clean text content from top search results, ready for LLM use.`,
     {
       query: z.string().describe("Websearch query"),
-      numResults: z.number().optional().describe("Number of search results to return (default: 8)"),
+      numResults: z.coerce.number().optional().describe("Number of search results to return (must be a number, default: 8)"),
       livecrawl: z.enum(['fallback', 'preferred']).optional().describe("Live crawl mode - 'fallback': use live crawling as backup if cached content unavailable, 'preferred': prioritize live crawling (default: 'fallback')"),
-      type: z.enum(['auto', 'fast', 'deep']).optional().describe("Search type - 'auto': balanced search (default), 'fast': quick results, 'deep': comprehensive search"),
-      contextMaxCharacters: z.number().optional().describe("Maximum characters for context string optimized for LLMs (default: 10000)")
+      type: z.enum(['auto', 'fast']).optional().describe("Search type - 'auto': balanced search (default), 'fast': quick results"),
+      contextMaxCharacters: z.coerce.number().optional().describe("Maximum characters for context string optimized for LLMs (must be a number, default: 10000)")
     },
     {
       readOnlyHint: true,
@@ -92,6 +96,12 @@ export function registerWebSearchTool(server: McpServer, config?: { exaApiKey?: 
       } catch (error) {
         logger.error(error);
         
+        // Check for rate limit error on free MCP
+        const rateLimitResult = handleRateLimitError(error, config?.userProvidedApiKey, 'web_search_exa');
+        if (rateLimitResult) {
+          return rateLimitResult;
+        }
+        
         if (axios.isAxiosError(error)) {
           // Handle Axios errors specifically
           const statusCode = error.response?.status || 'unknown';
@@ -118,4 +128,4 @@ export function registerWebSearchTool(server: McpServer, config?: { exaApiKey?: 
       }
     }
   );
-}  
+}                                                                                                                                                                                                

@@ -4,26 +4,30 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
+import { handleRateLimitError } from "../utils/errorHandler.js";
 import { checkpoint } from "agnost";
 
-export function registerDeepSearchTool(server: McpServer, config?: { exaApiKey?: string }): void {
+export function registerPeopleSearchTool(server: McpServer, config?: { exaApiKey?: string; userProvidedApiKey?: boolean }): void {
   server.tool(
-    "deep_search_exa",
-    "Searches the web and return results in a natural language format.",
+    "people_search_exa",
+    `Find people and their professional profiles.
+
+Best for: Finding professionals, executives, or anyone with a public profile.
+Returns: Profile information and links.`,
     {
-      objective: z.string().describe("Natural language description of what the web search is looking for. Try to make the search query atomic - looking for a specific piece of information. May include guidance about preferred sources or freshness."),
-      search_queries: z.array(z.string()).optional().describe("Optional list of keyword search queries, may include search operators. The search queries should be related to the user's objective. Limited to 5 entries of up to 5 words each (around 200 characters)."),
+      query: z.string().describe("Search query for finding people"),
+      numResults: z.coerce.number().optional().describe("Number of profile results to return (must be a number, default: 5)")
     },
     {
       readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: true
     },
-    async ({ objective, search_queries }) => {
-      const requestId = `deep_search_exa-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      const logger = createRequestLogger(requestId, 'deep_search_exa');
+    async ({ query, numResults }) => {
+      const requestId = `people_search_exa-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const logger = createRequestLogger(requestId, 'people_search_exa');
       
-      logger.start(objective);
+      logger.start(`${query}`);
       
       try {
         // Create a fresh axios instance for each request
@@ -33,29 +37,28 @@ export function registerDeepSearchTool(server: McpServer, config?: { exaApiKey?:
             'accept': 'application/json',
             'content-type': 'application/json',
             'x-api-key': config?.exaApiKey || process.env.EXA_API_KEY || '',
-            'x-exa-integration': 'deep-search-mcp'
+            'x-exa-integration': 'people-search-mcp'
           },
           timeout: 25000
         });
 
+        let searchQuery = query;
+        searchQuery = `${query} profile`;
+
         const searchRequest: ExaSearchRequest = {
-          query: objective,
-          type: "deep",
+          query: searchQuery,
+          type: "auto",
+          numResults: numResults || API_CONFIG.DEFAULT_NUM_RESULTS,
+          category: "people",
           contents: {
-            context: true
-          }
+            text: {
+              maxCharacters: API_CONFIG.DEFAULT_MAX_CHARACTERS
+            },
+          },
         };
         
-        // Add additional queries if provided
-        if (search_queries && search_queries.length > 0) {
-          searchRequest.additionalQueries = search_queries;
-          logger.log(`Using ${search_queries.length} additional queries`);
-        } else {
-          logger.log("Using automatic query expansion");
-        }
-        
-        checkpoint('deep_search_request_prepared');
-        logger.log("Sending deep search request to Exa API");
+        checkpoint('people_search_request_prepared');
+        logger.log("Sending request to Exa API for people search");
         
         const response = await axiosInstance.post<ExaSearchResponse>(
           API_CONFIG.ENDPOINTS.SEARCH,
@@ -63,34 +66,40 @@ export function registerDeepSearchTool(server: McpServer, config?: { exaApiKey?:
           { timeout: 25000 }
         );
         
-        checkpoint('deep_search_response_received');
+        checkpoint('people_search_response_received');
         logger.log("Received response from Exa API");
 
-        if (!response.data || !response.data.context) {
+        if (!response.data || !response.data.results) {
           logger.log("Warning: Empty or invalid response from Exa API");
-          checkpoint('deep_search_complete');
+          checkpoint('people_search_complete');
           return {
             content: [{
               type: "text" as const,
-              text: "No search results found. Please try a different query."
+              text: "No content found. Please try a different query."
             }]
           };
         }
 
-        logger.log(`Context received with ${response.data.context.length} characters`);
+        logger.log(`Found ${response.data.results.length} results`);
         
         const result = {
           content: [{
             type: "text" as const,
-            text: response.data.context
+            text: JSON.stringify(response.data, null, 2)
           }]
         };
         
-        checkpoint('deep_search_complete');
+        checkpoint('people_search_complete');
         logger.complete();
         return result;
       } catch (error) {
         logger.error(error);
+        
+        // Check for rate limit error on free MCP
+        const rateLimitResult = handleRateLimitError(error, config?.userProvidedApiKey, 'people_search_exa');
+        if (rateLimitResult) {
+          return rateLimitResult;
+        }
         
         if (axios.isAxiosError(error)) {
           // Handle Axios errors specifically
@@ -101,7 +110,7 @@ export function registerDeepSearchTool(server: McpServer, config?: { exaApiKey?:
           return {
             content: [{
               type: "text" as const,
-              text: `Deep search error (${statusCode}): ${errorMessage}`
+              text: `People search error (${statusCode}): ${errorMessage}`
             }],
             isError: true,
           };
@@ -111,7 +120,7 @@ export function registerDeepSearchTool(server: McpServer, config?: { exaApiKey?:
         return {
           content: [{
             type: "text" as const,
-            text: `Deep search error: ${error instanceof Error ? error.message : String(error)}`
+            text: `People search error: ${error instanceof Error ? error.message : String(error)}`
           }],
           isError: true,
         };
@@ -119,4 +128,3 @@ export function registerDeepSearchTool(server: McpServer, config?: { exaApiKey?:
     }
   );
 }
-

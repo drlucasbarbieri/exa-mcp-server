@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { API_CONFIG } from "./config.js";
 import { DeepResearchCheckResponse, DeepResearchErrorResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
+import { handleRateLimitError } from "../utils/errorHandler.js";
 import { checkpoint } from "agnost";
 
 // Helper function to create a delay
@@ -11,18 +12,27 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export function registerDeepResearchCheckTool(server: McpServer, config?: { exaApiKey?: string }): void {
+export function registerDeepResearchCheckTool(server: McpServer, config?: { exaApiKey?: string; userProvidedApiKey?: boolean }): void {
   server.tool(
     "deep_researcher_check",
-    "Check the status and retrieve results of a deep research task. This tool monitors the progress of an AI agent that performs comprehensive web searches, analyzes multiple sources, and synthesizes findings into detailed research reports. The tool includes a built-in 5-second delay before checking to allow processing time. IMPORTANT: You must call this tool repeatedly (poll) until the status becomes 'completed' to get the final research results. When status is 'running', wait a few seconds and call this tool again with the same task ID.",
+    `Check status and get results from a deep research task.
+
+Best for: Getting the research report after calling deep_researcher_start.
+Returns: Research report when complete, or status update if still running.
+Important: Keep calling with the same research ID until status is 'completed'.`,
     {
-      taskId: z.string().describe("The task ID returned from deep_researcher_start tool")
+      researchId: z.string().describe("The research ID returned from deep_researcher_start tool")
     },
-    async ({ taskId }) => {
+    {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true
+    },
+    async ({ researchId }) => {
       const requestId = `deep_researcher_check-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       const logger = createRequestLogger(requestId, 'deep_researcher_check');
       
-      logger.start(taskId);
+      logger.start(researchId);
       
       try {
         // Built-in delay to allow processing time
@@ -41,11 +51,11 @@ export function registerDeepResearchCheckTool(server: McpServer, config?: { exaA
           timeout: 25000
         });
 
-        logger.log(`Checking status for task: ${taskId}`);
+        logger.log(`Checking status for research: ${researchId}`);
         
         checkpoint('deep_research_check_request_prepared');
         const response = await axiosInstance.get<DeepResearchCheckResponse>(
-          `${API_CONFIG.ENDPOINTS.RESEARCH_TASKS}/${taskId}`,
+          `${API_CONFIG.ENDPOINTS.RESEARCH}/${researchId}`,
           { timeout: 25000 }
         );
         
@@ -68,45 +78,51 @@ export function registerDeepResearchCheckTool(server: McpServer, config?: { exaA
         let resultText: string;
         
         if (response.data.status === 'completed') {
-          // Task completed - return only the essential research report to avoid context overflow
           resultText = JSON.stringify({
             success: true,
             status: response.data.status,
-            taskId: response.data.id,
-            report: response.data.data?.report || "No report generated",
-            timeMs: response.data.timeMs,
+            researchId: response.data.researchId,
+            report: response.data.output?.content || "No report generated",
+            parsedOutput: response.data.output?.parsed,
+            citations: response.data.citations,
             model: response.data.model,
-            message: "🎉 Deep research completed! Here's your comprehensive research report."
+            costDollars: response.data.costDollars,
+            message: "Deep research completed! Here's your comprehensive research report."
           }, null, 2);
           logger.log("Research completed successfully");
-        } else if (response.data.status === 'running') {
-          // Task still running - return minimal status to avoid filling context window
+        } else if (response.data.status === 'running' || response.data.status === 'pending') {
           resultText = JSON.stringify({
             success: true,
             status: response.data.status,
-            taskId: response.data.id,
-            message: "🔄 Research in progress. Continue polling...",
-            nextAction: "Call deep_researcher_check again with the same task ID"
+            researchId: response.data.researchId,
+            message: "Research in progress. Continue polling...",
+            nextAction: "Call deep_researcher_check again with the same research ID"
           }, null, 2);
           logger.log("Research still in progress");
         } else if (response.data.status === 'failed') {
-          // Task failed
           resultText = JSON.stringify({
             success: false,
             status: response.data.status,
-            taskId: response.data.id,
+            researchId: response.data.researchId,
             createdAt: new Date(response.data.createdAt).toISOString(),
             instructions: response.data.instructions,
-            message: "❌ Deep research task failed. Please try starting a new research task with different instructions."
+            message: "Deep research task failed. Please try starting a new research task with different instructions."
           }, null, 2);
           logger.log("Research task failed");
-        } else {
-          // Unknown status
+        } else if (response.data.status === 'canceled') {
           resultText = JSON.stringify({
             success: false,
             status: response.data.status,
-            taskId: response.data.id,
-            message: `⚠️ Unknown status: ${response.data.status}. Continue polling or restart the research task.`
+            researchId: response.data.researchId,
+            message: "Research task was canceled."
+          }, null, 2);
+          logger.log("Research task canceled");
+        } else {
+          resultText = JSON.stringify({
+            success: false,
+            status: response.data.status,
+            researchId: response.data.researchId,
+            message: `Unknown status: ${response.data.status}. Continue polling or restart the research task.`
           }, null, 2);
           logger.log(`Unknown status: ${response.data.status}`);
         }
@@ -128,19 +144,25 @@ export function registerDeepResearchCheckTool(server: McpServer, config?: { exaA
           // Handle specific 404 error for task not found
           if (error.response?.status === 404) {
             const errorData = error.response.data as DeepResearchErrorResponse;
-            logger.log(`Task not found: ${taskId}`);
+            logger.log(`Research not found: ${researchId}`);
             return {
               content: [{
                 type: "text" as const,
                 text: JSON.stringify({
                   success: false,
-                  error: "Task not found",
-                  taskId: taskId,
-                  message: "🚫 The specified task ID was not found. Please check the ID or start a new research task using deep_researcher_start."
+                  error: "Research not found",
+                  researchId: researchId,
+                  message: "The specified research ID was not found. Please check the ID or start a new research task using deep_researcher_start."
                 }, null, 2)
               }],
               isError: true,
             };
+          }
+          
+          // Check for rate limit error on free MCP
+          const rateLimitResult = handleRateLimitError(error, config?.userProvidedApiKey, 'deep_researcher_check');
+          if (rateLimitResult) {
+            return rateLimitResult;
           }
           
           // Handle other Axios errors
@@ -168,4 +190,4 @@ export function registerDeepResearchCheckTool(server: McpServer, config?: { exaA
       }
     }
   );
-}  
+}                                                                                                                                                                                                                                                                                                

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+process.env.AGNOST_LOG_LEVEL = 'error';
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { log } from "./utils/logger.js";
@@ -21,18 +23,6 @@ export const configSchema = z.object({
 // Export stateless flag for MCP
 export const stateless = true;
 
-// Tool registry for managing available tools
-const availableTools = {
-  'web_search_exa': { name: 'Web Search (Exa)', description: 'Real-time web search using Exa AI', enabled: true },
-  'get_code_context_exa': { name: 'Code Context Search', description: 'Search for code snippets, examples, and documentation from open source repositories', enabled: true },
-  'deep_search_exa': { name: 'Deep Search (Exa)', description: 'Advanced web search with query expansion and high-quality summaries', enabled: false },
-  'crawling_exa': { name: 'Web Crawling', description: 'Extract content from specific URLs', enabled: false },
-  'deep_researcher_start': { name: 'Deep Researcher Start', description: 'Start a comprehensive AI research task', enabled: false },
-  'deep_researcher_check': { name: 'Deep Researcher Check', description: 'Check status and retrieve results of research task', enabled: false },
-  'linkedin_search_exa': { name: 'LinkedIn Search', description: 'Search LinkedIn profiles and companies', enabled: false },
-  'company_research_exa': { name: 'Company Research', description: 'Research companies and organizations', enabled: true },
-};  
-
 /**
  * Exa AI Web Search MCP Server
  * 
@@ -44,7 +34,7 @@ const availableTools = {
  * - Real-time web searching with configurable parameters
  * - Company research and analysis
  * - Web content crawling
- * - LinkedIn search capabilities
+ * - People search capabilities
  * - Deep research workflows
  * - And more!
  * 
@@ -90,7 +80,7 @@ export default function ({ config }: { config: z.infer<typeof configSchema> }) {
     const server = new McpServer({
       name: "exa-search-server",
       title: "Exa",
-      version: "3.1.3"
+      version: "3.1.8"
     });
     
     log("Server initialized with modern MCP SDK and Smithery CLI support");

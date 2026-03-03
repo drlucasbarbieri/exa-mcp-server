@@ -3,31 +3,34 @@ import { trackMCP, createConfig } from 'agnost';
 
 // Import tool implementations
 import { registerWebSearchTool } from "./tools/webSearch.js";
-import { registerDeepSearchTool } from "./tools/deepSearch.js";
 import { registerCompanyResearchTool } from "./tools/companyResearch.js";
 import { registerCrawlingTool } from "./tools/crawling.js";
+import { registerPeopleSearchTool } from "./tools/peopleSearch.js";
 import { registerLinkedInSearchTool } from "./tools/linkedInSearch.js";
 import { registerDeepResearchStartTool } from "./tools/deepResearchStart.js";
 import { registerDeepResearchCheckTool } from "./tools/deepResearchCheck.js";
 import { registerExaCodeTool } from "./tools/exaCode.js";
+import { registerWebSearchAdvancedTool } from "./tools/webSearchAdvanced.js";
 import { log } from "./utils/logger.js";
 
 // Tool registry for managing available tools
 const availableTools = {
   'web_search_exa': { name: 'Web Search (Exa)', description: 'Real-time web search using Exa AI', enabled: true },
+  'web_search_advanced_exa': { name: 'Advanced Web Search (Exa)', description: 'Advanced web search with full Exa API control including category filters, domain restrictions, date ranges, highlights, summaries, and subpage crawling', enabled: false },
   'get_code_context_exa': { name: 'Code Context Search', description: 'Search for code snippets, examples, and documentation from open source repositories', enabled: true },
-  'deep_search_exa': { name: 'Deep Search (Exa)', description: 'Advanced web search with query expansion and high-quality summaries', enabled: false },
+  'company_research_exa': { name: 'Company Research', description: 'Research companies and organizations', enabled: false },
   'crawling_exa': { name: 'Web Crawling', description: 'Extract content from specific URLs', enabled: false },
   'deep_researcher_start': { name: 'Deep Researcher Start', description: 'Start a comprehensive AI research task', enabled: false },
   'deep_researcher_check': { name: 'Deep Researcher Check', description: 'Check status and retrieve results of research task', enabled: false },
-  'linkedin_search_exa': { name: 'LinkedIn Search', description: 'Search LinkedIn profiles and companies', enabled: false },
-  'company_research_exa': { name: 'Company Research', description: 'Research companies and organizations', enabled: false },
+  'people_search_exa': { name: 'People Search', description: 'Search for people and professional profiles', enabled: false },
+  'linkedin_search_exa': { name: 'LinkedIn Search (Deprecated)', description: 'Deprecated: Use people_search_exa instead', enabled: false },
 };
 
 export interface McpConfig {
   exaApiKey?: string;
   enabledTools?: string[];
   debug?: boolean;
+  userProvidedApiKey?: boolean;
 }
 
 /**
@@ -62,9 +65,9 @@ export function initializeMcpServer(server: any, config: McpConfig = {}) {
       registeredTools.push('web_search_exa');
     }
     
-    if (shouldRegisterTool('deep_search_exa')) {
-      registerDeepSearchTool(server, config);
-      registeredTools.push('deep_search_exa');
+    if (shouldRegisterTool('web_search_advanced_exa')) {
+      registerWebSearchAdvancedTool(server, config);
+      registeredTools.push('web_search_advanced_exa');
     }
     
     if (shouldRegisterTool('company_research_exa')) {
@@ -77,6 +80,12 @@ export function initializeMcpServer(server: any, config: McpConfig = {}) {
       registeredTools.push('crawling_exa');
     }
     
+    if (shouldRegisterTool('people_search_exa')) {
+      registerPeopleSearchTool(server, config);
+      registeredTools.push('people_search_exa');
+    }
+    
+    // Deprecated: linkedin_search_exa - kept for backwards compatibility
     if (shouldRegisterTool('linkedin_search_exa')) {
       registerLinkedInSearchTool(server, config);
       registeredTools.push('linkedin_search_exa');
@@ -172,7 +181,8 @@ export function initializeMcpServer(server: any, config: McpConfig = {}) {
     
     try {
       trackMCP(underlyingServer, "f0df908b-3703-40a0-a905-05c907da1ca3", createConfig({
-        endpoint: "https://api.agnost.ai"
+        endpoint: "https://api.agnost.ai",
+        disableLogs: true
       }));
       
       if (config.debug) {

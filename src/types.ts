@@ -1,7 +1,7 @@
 // Exa API Types
 export interface ExaSearchRequest {
   query: string;
-  type: 'auto' | 'fast' | 'deep';
+  type: 'auto' | 'fast';
   category?: string;
   includeDomains?: string[];
   excludeDomains?: string[];
@@ -25,10 +25,42 @@ export interface ExaSearchRequest {
   };
 }
 
-export interface ExaCrawlRequest {
-  ids: string[];
-  text: boolean;
-  livecrawl?: 'always' | 'fallback' | 'preferred';
+export interface ExaAdvancedSearchRequest {
+  query: string;
+  type: 'auto' | 'fast' | 'neural';
+  numResults?: number;
+  category?: 'company' | 'research paper' | 'news' | 'pdf' | 'github' | 'tweet' | 'personal site' | 'people' | 'financial report';
+  includeDomains?: string[];
+  excludeDomains?: string[];
+  startPublishedDate?: string;
+  endPublishedDate?: string;
+  startCrawlDate?: string;
+  endCrawlDate?: string;
+  includeText?: string[];
+  excludeText?: string[];
+  userLocation?: string;
+  moderation?: boolean;
+  additionalQueries?: string[];
+  contents: {
+    text?: {
+      maxCharacters?: number;
+    } | boolean;
+    context?: {
+      maxCharacters?: number;
+    } | boolean;
+    summary?: {
+      query?: string;
+    } | boolean;
+    highlights?: {
+      numSentences?: number;
+      highlightsPerUrl?: number;
+      query?: string;
+    };
+    livecrawl?: 'never' | 'fallback' | 'always' | 'preferred';
+    livecrawlTimeout?: number;
+    subpages?: number;
+    subpageTarget?: string[];
+  };
 }
 
 export interface ExaSearchResult {
@@ -39,6 +71,8 @@ export interface ExaSearchResult {
   author: string;
   text: string;
   summary?: string;
+  highlights?: string[];
+  highlightScores?: number[];
   image?: string;
   favicon?: string;
   score?: number;
@@ -52,76 +86,44 @@ export interface ExaSearchResponse {
   results: ExaSearchResult[];
 }
 
-// Tool Types
-export interface SearchArgs {
-  query: string;
-  numResults?: number;
-  livecrawl?: 'fallback' | 'preferred';
-  type?: 'auto' | 'fast' | 'deep';
-}
-
-// Deep Research API Types
+// Deep Research API Types (v1)
 export interface DeepResearchRequest {
-  model: 'exa-research' | 'exa-research-pro';
+  model: 'exa-research-fast' | 'exa-research' | 'exa-research-pro';
   instructions: string;
-  output?: {
-    inferSchema?: boolean;
-  };
+  outputSchema?: Record<string, unknown>;
 }
 
 export interface DeepResearchStartResponse {
-  id: string;
-  outputSchema?: {
-    type: string;
-    properties: any;
-    required: string[];
-    additionalProperties: boolean;
-  };
+  researchId: string;
+  createdAt: number;
+  model: string;
+  instructions: string;
+  outputSchema?: Record<string, unknown>;
+  status: string;
 }
 
 export interface DeepResearchCheckResponse {
-  id: string;
+  researchId: string;
   createdAt: number;
-  status: 'running' | 'completed' | 'failed';
+  model: string;
   instructions: string;
-  schema?: {
-    type: string;
-    properties: any;
-    required: string[];
-    additionalProperties: boolean;
+  outputSchema?: Record<string, unknown>;
+  finishedAt?: number;
+  status: 'pending' | 'running' | 'completed' | 'canceled' | 'failed';
+  output?: {
+    content: string;
+    parsed?: Record<string, unknown>;
   };
-  data?: {
-    report?: string;
-    [key: string]: any;
-  };
-  operations?: Array<{
-    type: string;
-    stepId: string;
-    text?: string;
-    query?: string;
-    goal?: string;
-    results?: any[];
-    url?: string;
-    thought?: string;
-    data?: any;
+  citations?: Array<{
+    id: string;
+    url: string;
+    title: string;
   }>;
-  citations?: {
-    [key: string]: Array<{
-      id: string;
-      url: string;
-      title: string;
-      snippet: string;
-    }>;
-  };
-  timeMs?: number;
-  model?: string;
   costDollars?: {
     total: number;
-    research: {
-      searches: number;
-      pages: number;
-      reasoningTokens: number;
-    };
+    numSearches: number;
+    numPages: number;
+    reasoningTokens: number;
   };
 }
 
@@ -142,14 +144,6 @@ export interface ExaCodeRequest {
   query: string;
   tokensNum: number;
   flags?: string[];
-}
-
-export interface ExaCodeResult {
-  id: string;
-  title: string;
-  url: string;
-  text: string;
-  score?: number;
 }
 
 export interface ExaCodeResponse {
