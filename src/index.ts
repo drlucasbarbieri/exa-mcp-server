@@ -9,6 +9,7 @@ import { initializeMcpServer } from "./mcp-handler.js";
 // Configuration schema for the EXA API key and tool selection
 export const configSchema = z.object({
   exaApiKey: z.string().optional().describe("Exa AI API key for search operations"),
+  polygonApiKey: z.string().optional().describe("Polygon.io API key for financial market data"),
   enabledTools: z.union([
     z.array(z.string()),
     z.string()
@@ -65,6 +66,7 @@ export default function ({ config }: { config: z.infer<typeof configSchema> }) {
     // Create normalized config with parsed tools
     const normalizedConfig = {
       exaApiKey: config.exaApiKey,
+      polygonApiKey: config.polygonApiKey,
       enabledTools: parsedEnabledTools,
       debug: config.debug
     };

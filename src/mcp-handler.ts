@@ -28,6 +28,7 @@ const availableTools = {
 
 export interface McpConfig {
   exaApiKey?: string;
+  polygonApiKey?: string;
   enabledTools?: string[];
   debug?: boolean;
   userProvidedApiKey?: boolean;

@@ -228,6 +228,7 @@ async function checkRateLimits(ip: string, debug: boolean): Promise<Response | n
  */
 function getConfigFromUrl(url: string) {
   let exaApiKey = process.env.EXA_API_KEY;
+  let polygonApiKey = process.env.POLYGON_API_KEY;
   let enabledTools: string[] | undefined;
   let debug = process.env.DEBUG === 'true';
   let userProvidedApiKey = false;
@@ -242,6 +243,14 @@ function getConfigFromUrl(url: string) {
       if (keyFromUrl) {
         exaApiKey = keyFromUrl;
         userProvidedApiKey = true;
+      }
+    }
+
+    // Support ?polygonApiKey=YOUR_KEY (query param takes precedence)
+    if (params.has('polygonApiKey')) {
+      const keyFromUrl = params.get('polygonApiKey');
+      if (keyFromUrl) {
+        polygonApiKey = keyFromUrl;
       }
     }
 
@@ -275,7 +284,7 @@ function getConfigFromUrl(url: string) {
       .filter(t => t.length > 0);
   }
 
-  return { exaApiKey, enabledTools, debug, userProvidedApiKey };
+  return { exaApiKey, polygonApiKey, enabledTools, debug, userProvidedApiKey };
 }
 
 /**
@@ -284,7 +293,7 @@ function getConfigFromUrl(url: string) {
  * configuration (tools and API key). This prevents API key leakage between
  * different users who might pass different keys via URL.
  */
-function createHandler(config: { exaApiKey?: string; enabledTools?: string[]; debug: boolean; userProvidedApiKey: boolean }) {
+function createHandler(config: { exaApiKey?: string; polygonApiKey?: string; enabledTools?: string[]; debug: boolean; userProvidedApiKey: boolean }) {
   return createMcpHandler(
     (server: any) => {
       initializeMcpServer(server, config);
