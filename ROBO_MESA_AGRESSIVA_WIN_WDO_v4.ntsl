@@ -1,0 +1,648 @@
+// ROBO_MESA_AGRESSIVA_WIN_WDO v4.0
+// NTSL ProfitChart - Regime por DI+/DI- (Alta = só compra / Baixa = só venda)
+// Melhorias v4.0:
+//   - Corrigido: vMelhorPreco inicializado com High/Low por lado
+//   - Corrigido: Break-Even usa High (compra) / Low (venda) para backtest fiel
+//   - Corrigido: Confirmação DI realmente dinâmica (respeita pConfirmacaoDI)
+//   - Novo: Filtro de primeiros minutos (evita abertura volátil)
+//   - Novo: Proteção de drawdown diário em pontos
+//   - Novo: Filtro VWAP (compra só acima / venda só abaixo)
+//   - Novo: Filtro de spread máximo
+//   - Novo: Ordens Limit em vez de Market (reduz slippage)
+//   - Ajustado: Parâmetros R:R melhorados (WDO Rev e Trailing)
+//   - Ajustado: Filtro ATR disponível também para WDO
+
+input
+  // Contexto / tendência
+  pMMEContexto(200);
+  pMMERapida(9);
+  pMMELenta(21);
+
+  // ADX / DI (regime)
+  pADXPeriodo(14);
+  pADXMinTrend(30.0);
+  pADXMaxLateral(15.0);
+  pDIMargem(5.0);            // histerese para evitar flip-flop DI
+  pConfirmacaoDI(2);         // número de barras de confirmação DI (1=sem, 2+=N barras)
+  pExigirADXSubindo(true);   // exige ADX crescente para validar regime
+
+  // RSI
+  pRSIPeriodo(14);
+  pRSITipo(0);
+  pRSISobrecompra(70.0);
+  pRSISobrevenda(30.0);
+
+  // Filtros
+  pVolumeMinimo(500.0);
+  pUsarFiltroVolume(true);
+
+  pATRPeriodo(14);
+  pATRTipoMedia(2);
+  pATRMinimoWIN(50.0);       // filtro ATR para WIN
+  pATRMinimoWDO(0.8);        // filtro ATR para WDO (novo)
+  pUsarFiltroATR(true);
+
+  // Filtro primeiros minutos (novo)
+  pEvitarAbertura(true);
+  pMinutosAbertura(15);      // evitar primeiros 15 min do pregão
+
+  // Filtro spread (novo)
+  pUsarFiltroSpread(false);  // desativado por padrão; ativar se broker expor Ask/Bid
+  pSpreadMaxWIN(10.0);
+  pSpreadMaxWDO(0.5);
+
+  // Filtro VWAP (novo)
+  pUsarVWAP(true);
+
+  // Stops/Gains por ativo e modo
+  pStopWIN_Trend(250.0);     // era 300
+  pGainWIN_Trend(600.0);     // era 700
+  pBEWIN_Trend(200.0);       // era 280
+
+  pStopWIN_Rev(180.0);
+  pGainWIN_Rev(350.0);
+  pBEWIN_Rev(150.0);
+
+  pStopWDO_Trend(7.0);
+  pGainWDO_Trend(16.0);
+  pBEWDO_Trend(6.5);
+
+  pStopWDO_Rev(4.0);         // era 4.5
+  pGainWDO_Rev(10.0);        // era 8.5 → R:R 1:2.5
+  pBEWDO_Rev(3.5);           // era 4.0
+
+  // Controles
+  pMaxTradesDia(4);
+  pMaxStopsDia(2);
+  pCooldownBarras(8);
+  pQtdeContratos(1);
+
+  // Proteção drawdown diário (novo)
+  pUsarMaxDrawdown(true);
+  pMaxDrawdownDia(500.0);    // pontos (ex: WIN = 500pts = ~R$100/contrato)
+
+  // Horários
+  pHoraIni(915);
+  pHoraFim(1700);
+  pHoraFecha(1730);
+
+  // Gestão
+  pUsarBE(true);
+  pBEOffset(30.0);           // auto-cap p/ WDO via Gain
+  pUsarTrailing(true);
+  pTrailingStart(300.0);     // era 400 → ativa mais cedo
+  pTrailingStep(100.0);      // auto-cap p/ WDO via Gain
+
+  // Tipo de ordem (novo)
+  pUsarOrdemLimit(true);     // true=Limit (menos slippage), false=Market
+  pOffsetLimit(1);           // ticks de offset p/ a ordem limit
+
+var
+  vTradesDia: Integer;
+  vStopsDia: Integer;
+  vBarraUltStop: Integer;
+  vDataAnterior: Integer;
+
+  vADXVal: Float;
+  vADXVal_1: Float;
+  vADXUp: Boolean;
+
+  vDIPlus: Float;
+  vDIMinus: Float;
+
+  vMME200: Float;
+  vMME9: Float;
+  vMME21: Float;
+  vMME9_1: Float;
+  vMME21_1: Float;
+
+  vRSIVal: Float;
+  vATRVal: Float;
+  vVWAP: Float;
+
+  vModoTrend: Boolean;
+  vModoRev: Boolean;
+
+  vBull: Boolean;
+  vBear: Boolean;
+  vBullOK: Boolean;
+  vBearOK: Boolean;
+
+  vTick: Float;
+  vIsWIN: Boolean;
+
+  vStopAtual: Float;
+  vGainAtual: Float;
+  vBEAtual: Float;
+
+  vPrecoEntrada: Float;
+  vPosInit: Boolean;
+
+  vStopDinamico: Float;
+  vBEAtivado: Boolean;
+  vTrailingAtivado: Boolean;
+  vMelhorPreco: Float;
+
+  vSinalCompra: Boolean;
+  vSinalVenda: Boolean;
+  vPodeOperar: Boolean;
+
+  vCorpo: Float;
+  vSombraSup: Float;
+  vSombraInf: Float;
+  vMaxOC: Float;
+  vMinOC: Float;
+
+  vDistMME: Float;
+
+  // efetivos (auto-ajuste p/ WDO via Gain + respeita tick)
+  vTrailingStartEf: Float;
+  vTrailingStepEf: Float;
+  vBEOffsetEf: Float;
+
+  // drawdown diário (novo)
+  vPLDia: Float;
+  vPrecoFechamento: Float;
+
+  // spread (novo)
+  vSpread: Float;
+  vSpreadMax: Float;
+
+  // confirmação DI dinâmica
+  i: Integer;
+  vConfBull: Boolean;
+  vConfBear: Boolean;
+
+  // ordem limit
+  vPrecoOrdem: Float;
+
+begin
+  // -------------------------------------------------
+  // Reset diário
+  // -------------------------------------------------
+  if (Date <> vDataAnterior) then
+  begin
+    vTradesDia    := 0;
+    vStopsDia     := 0;
+    vBarraUltStop := -999999;
+    vBEAtivado    := false;
+    vTrailingAtivado := false;
+    vPosInit      := false;
+    vPLDia        := 0;         // (novo) PL do dia zerado
+    vDataAnterior := Date;
+  end;
+
+  // -------------------------------------------------
+  // Detecta ativo via tick mínimo (WIN ~ 5 / WDO ~ 0.5)
+  // -------------------------------------------------
+  vTick := MinPriceIncrement;
+  if (vTick <= 0) then vTick := 1;
+  vIsWIN := (vTick >= 1.0);
+
+  // -------------------------------------------------
+  // Proteção: histórico mínimo
+  // -------------------------------------------------
+  if (CurrentBar < pMMEContexto) then
+  begin
+    Plot(MediaExp(pMMEContexto, Close));
+    Plot2(MediaExp(pMMERapida, Close));
+    Plot3(MediaExp(pMMELenta, Close));
+    exit;
+  end;
+
+  // -------------------------------------------------
+  // Indicadores
+  // -------------------------------------------------
+  vMME200 := MediaExp(pMMEContexto, Close);
+  vMME9   := MediaExp(pMMERapida, Close);
+  vMME21  := MediaExp(pMMELenta, Close);
+
+  vMME9_1  := MediaExp(pMMERapida, Close)[1];
+  vMME21_1 := MediaExp(pMMELenta, Close)[1];
+
+  vADXVal   := ADX(pADXPeriodo, pADXPeriodo);
+  vADXVal_1 := ADX(pADXPeriodo, pADXPeriodo)[1];
+  vADXUp    := (vADXVal > vADXVal_1);
+
+  vDIPlus  := DiPDiM(pADXPeriodo)|0|;
+  vDIMinus := DiPDiM(pADXPeriodo)|1|;
+
+  vRSIVal := RSI(pRSIPeriodo, pRSITipo);
+  vATRVal := AvgTrueRange(pATRPeriodo, pATRTipoMedia);
+  vVWAP   := VWAP;
+
+  // -------------------------------------------------
+  // Regime (força por ADX, lado por DI+/DI-)
+  // -------------------------------------------------
+  vModoTrend := (vADXVal >= pADXMinTrend);
+  vModoRev   := (vADXVal <= pADXMaxLateral);
+
+  vBull := vModoTrend and (vDIPlus  > (vDIMinus + pDIMargem));
+  vBear := vModoTrend and (vDIMinus > (vDIPlus  + pDIMargem));
+
+  // -------------------------------------------------
+  // CORRIGIDO: Confirmação DI dinâmica (N barras reais)
+  // -------------------------------------------------
+  vBullOK := vBull;
+  vBearOK := vBear;
+
+  if (pConfirmacaoDI >= 2) then
+  begin
+    vConfBull := true;
+    vConfBear := true;
+
+    for i := 1 to (pConfirmacaoDI - 1) do
+    begin
+      if not (DiPDiM(pADXPeriodo)|0|[i] > (DiPDiM(pADXPeriodo)|1|[i] + pDIMargem)) then
+        vConfBull := false;
+      if not (DiPDiM(pADXPeriodo)|1|[i] > (DiPDiM(pADXPeriodo)|0|[i] + pDIMargem)) then
+        vConfBear := false;
+    end;
+
+    vBullOK := vBull and vConfBull;
+    vBearOK := vBear and vConfBear;
+  end;
+
+  // Exigir ADX subindo
+  if (pExigirADXSubindo) then
+  begin
+    vBullOK := vBullOK and vADXUp;
+    vBearOK := vBearOK and vADXUp;
+  end;
+
+  // -------------------------------------------------
+  // Stops/Gains por ativo e modo (Trend/Rev)
+  // -------------------------------------------------
+  if (vIsWIN) then
+  begin
+    if (vModoTrend) then
+    begin
+      vStopAtual := pStopWIN_Trend;
+      vGainAtual := pGainWIN_Trend;
+      vBEAtual   := pBEWIN_Trend;
+    end
+    else
+    begin
+      vStopAtual := pStopWIN_Rev;
+      vGainAtual := pGainWIN_Rev;
+      vBEAtual   := pBEWIN_Rev;
+    end;
+  end
+  else
+  begin
+    if (vModoTrend) then
+    begin
+      vStopAtual := pStopWDO_Trend;
+      vGainAtual := pGainWDO_Trend;
+      vBEAtual   := pBEWDO_Trend;
+    end
+    else
+    begin
+      vStopAtual := pStopWDO_Rev;
+      vGainAtual := pGainWDO_Rev;
+      vBEAtual   := pBEWDO_Rev;
+    end;
+  end;
+
+  // -------------------------------------------------
+  // Efetivos (capados pelo Gain p/ não "matar" WDO)
+  // -------------------------------------------------
+  vTrailingStartEf := pTrailingStart;
+  if (vTrailingStartEf > (vGainAtual * 0.60)) then
+    vTrailingStartEf := (vGainAtual * 0.60);
+
+  vTrailingStepEf := pTrailingStep;
+  if (vTrailingStepEf > (vGainAtual * 0.15)) then
+    vTrailingStepEf := (vGainAtual * 0.15);
+
+  vBEOffsetEf := pBEOffset;
+  if (vBEOffsetEf > (vGainAtual * 0.05)) then
+    vBEOffsetEf := (vGainAtual * 0.05);
+
+  if (vTrailingStepEf < vTick) then vTrailingStepEf := vTick;
+  if (vBEOffsetEf     < vTick) then vBEOffsetEf     := vTick;
+
+  // -------------------------------------------------
+  // Pode operar?
+  // -------------------------------------------------
+  vPodeOperar := true;
+
+  // Janela de horário
+  if (Time < pHoraIni) or (Time > pHoraFim) then
+    vPodeOperar := false;
+
+  // NOVO: evitar primeiros minutos (abertura volátil)
+  if (pEvitarAbertura) and (Time < (pHoraIni + pMinutosAbertura)) then
+    vPodeOperar := false;
+
+  // Limites de trades/stops
+  if (vTradesDia >= pMaxTradesDia) then vPodeOperar := false;
+  if (vStopsDia  >= pMaxStopsDia)  then vPodeOperar := false;
+
+  // Cooldown após stop
+  if ((CurrentBar - vBarraUltStop) < pCooldownBarras) then
+    vPodeOperar := false;
+
+  // Filtro volume
+  if (pUsarFiltroVolume) and (Volume < pVolumeMinimo) then
+    vPodeOperar := false;
+
+  // Filtro ATR (WIN e WDO agora)
+  if (pUsarFiltroATR) then
+  begin
+    if (vIsWIN) and (vATRVal < pATRMinimoWIN) then
+      vPodeOperar := false;
+    if (not vIsWIN) and (vATRVal < pATRMinimoWDO) then
+      vPodeOperar := false;
+  end;
+
+  // NOVO: filtro drawdown diário
+  if (pUsarMaxDrawdown) and (vPLDia <= -pMaxDrawdownDia) then
+    vPodeOperar := false;
+
+  // NOVO: filtro spread
+  if (pUsarFiltroSpread) then
+  begin
+    vSpread := Ask - Bid;
+    if (vIsWIN) then
+      vSpreadMax := pSpreadMaxWIN
+    else
+      vSpreadMax := pSpreadMaxWDO;
+    if (vSpread > vSpreadMax) then
+      vPodeOperar := false;
+  end;
+
+  // -------------------------------------------------
+  // Fecha posição no horário limite
+  // -------------------------------------------------
+  if (Time >= pHoraFecha) and (HasPosition) then
+  begin
+    // Registra PL antes de fechar
+    if (IsBought) then
+      vPLDia := vPLDia + (Close - vPrecoEntrada)
+    else
+      vPLDia := vPLDia + (vPrecoEntrada - Close);
+    ClosePosition;
+  end;
+
+  // -------------------------------------------------
+  // Candle: corpo/sombras + distância da MME200
+  // -------------------------------------------------
+  if (Close > Open) then
+  begin
+    vMaxOC := Close;
+    vMinOC := Open;
+  end
+  else
+  begin
+    vMaxOC := Open;
+    vMinOC := Close;
+  end;
+
+  vCorpo     := vMaxOC - vMinOC;
+  vSombraSup := High - vMaxOC;
+  vSombraInf := vMinOC - Low;
+  vDistMME   := Abs(Close - vMME200);
+
+  // -------------------------------------------------
+  // Se não tem posição, zera flags
+  // -------------------------------------------------
+  if (not HasPosition) then
+  begin
+    vPosInit         := false;
+    vBEAtivado       := false;
+    vTrailingAtivado := false;
+    vStopDinamico    := 0;
+    vMelhorPreco     := 0;
+    vPrecoEntrada    := 0;
+  end;
+
+  // CORRIGIDO: captura preço real + inicializa vMelhorPreco por lado
+  if (HasPosition) and (not vPosInit) then
+  begin
+    vPrecoEntrada := Price;
+    // Compra → melhor = High; Venda → melhor = Low
+    if (IsBought) then
+      vMelhorPreco := High
+    else
+      vMelhorPreco := Low;
+    vPosInit := true;
+  end;
+
+  // -------------------------------------------------
+  // Sinais (somente flat)
+  // -------------------------------------------------
+  vSinalCompra := false;
+  vSinalVenda  := false;
+
+  if (vPodeOperar) and (not HasPosition) then
+  begin
+    // -------------------------
+    // TENDÊNCIA (lado definido por DI)
+    // -------------------------
+    if (vModoTrend) then
+    begin
+      // Alta => só compra
+      if (vBullOK) then
+      begin
+        if (Close > vMME200) and
+           (vMME9 > vMME21) and (vMME9_1 <= vMME21_1) and
+           (vRSIVal > 40) and (vRSIVal < pRSISobrecompra) and
+           (Close > Open) then
+          vSinalCompra := true;
+      end;
+
+      // Baixa => só venda
+      if (vBearOK) then
+      begin
+        if (Close < vMME200) and
+           (vMME9 < vMME21) and (vMME9_1 >= vMME21_1) and
+           (vRSIVal < 60) and (vRSIVal > pRSISobrevenda) and
+           (Close < Open) then
+          vSinalVenda := true;
+      end;
+    end;
+
+    // -------------------------
+    // REVERSÃO (martelo / shooting star)
+    // -------------------------
+    if (vModoRev) then
+    begin
+      if (vRSIVal < pRSISobrevenda) and
+         (Close > Open) and
+         (vCorpo > 0) and
+         (vSombraSup < (vCorpo * 0.3)) and
+         (vSombraInf > (vCorpo * 2.0)) and
+         (vDistMME < (vATRVal * 2)) then
+        vSinalCompra := true;
+
+      if (vRSIVal > pRSISobrecompra) and
+         (Close < Open) and
+         (vCorpo > 0) and
+         (vSombraInf < (vCorpo * 0.3)) and
+         (vSombraSup > (vCorpo * 2.0)) and
+         (vDistMME < (vATRVal * 2)) then
+        vSinalVenda := true;
+    end;
+
+    // NOVO: filtro VWAP (confirma lado antes de enviar)
+    if (pUsarVWAP) then
+    begin
+      if (vSinalCompra) and (Close < vVWAP) then vSinalCompra := false;
+      if (vSinalVenda)  and (Close > vVWAP) then vSinalVenda  := false;
+    end;
+  end;
+
+  // -------------------------------------------------
+  // Execução (Limit ou Market conforme parâmetro)
+  // -------------------------------------------------
+  if (vSinalCompra) then
+  begin
+    if (pUsarOrdemLimit) then
+      vPrecoOrdem := Close + (vTick * pOffsetLimit)
+    else
+      vPrecoOrdem := 0;
+
+    SendOrder(osBuy, IIF(pUsarOrdemLimit, otLimit, otMarket),
+              pQtdeContratos, vPrecoOrdem, 0);
+    vTradesDia := vTradesDia + 1;
+  end;
+
+  if (vSinalVenda) then
+  begin
+    if (pUsarOrdemLimit) then
+      vPrecoOrdem := Close - (vTick * pOffsetLimit)
+    else
+      vPrecoOrdem := 0;
+
+    SendOrder(osSell, IIF(pUsarOrdemLimit, otLimit, otMarket),
+              pQtdeContratos, vPrecoOrdem, 0);
+    vTradesDia := vTradesDia + 1;
+  end;
+
+  // -------------------------------------------------
+  // Gestão: posição COMPRADA
+  // -------------------------------------------------
+  if (HasPosition) and (IsBought) and (vPosInit) then
+  begin
+    if (High > vMelhorPreco) then vMelhorPreco := High;
+
+    // Trailing primeiro
+    if (pUsarTrailing) and ((vMelhorPreco - vPrecoEntrada) >= vTrailingStartEf) then
+    begin
+      if (not vTrailingAtivado) then
+      begin
+        vTrailingAtivado := true;
+        vStopDinamico := vPrecoEntrada + vTrailingStartEf - vTrailingStepEf;
+      end
+      else
+      begin
+        if ((vMelhorPreco - vTrailingStepEf) > vStopDinamico) then
+          vStopDinamico := vMelhorPreco - vTrailingStepEf;
+      end;
+    end
+    // CORRIGIDO: BE usa High para backtest fiel
+    else if (pUsarBE) and (not vBEAtivado) then
+    begin
+      if (High >= (vPrecoEntrada + vBEAtual)) then
+      begin
+        vStopDinamico := vPrecoEntrada + vBEOffsetEf;
+        vBEAtivado    := true;
+      end;
+    end;
+
+    // Stop fixo
+    if (Low <= (vPrecoEntrada - vStopAtual)) then
+    begin
+      vPLDia := vPLDia - vStopAtual;   // atualiza PL
+      ClosePosition;
+      vStopsDia     := vStopsDia + 1;
+      vBarraUltStop := CurrentBar;
+    end
+    // Stop dinâmico (BE/Trailing)
+    else if ((vBEAtivado or vTrailingAtivado) and (Low <= vStopDinamico)) then
+    begin
+      vPLDia := vPLDia + (vStopDinamico - vPrecoEntrada);
+      ClosePosition;
+      vStopsDia     := vStopsDia + 1;
+      vBarraUltStop := CurrentBar;
+    end
+    // Gain
+    else if (High >= (vPrecoEntrada + vGainAtual)) then
+    begin
+      vPLDia := vPLDia + vGainAtual;
+      ClosePosition;
+    end;
+  end;
+
+  // -------------------------------------------------
+  // Gestão: posição VENDIDA
+  // -------------------------------------------------
+  if (HasPosition) and (IsSold) and (vPosInit) then
+  begin
+    if (Low < vMelhorPreco) then vMelhorPreco := Low;
+
+    if (pUsarTrailing) and ((vPrecoEntrada - vMelhorPreco) >= vTrailingStartEf) then
+    begin
+      if (not vTrailingAtivado) then
+      begin
+        vTrailingAtivado := true;
+        vStopDinamico := vPrecoEntrada - vTrailingStartEf + vTrailingStepEf;
+      end
+      else
+      begin
+        if ((vMelhorPreco + vTrailingStepEf) < vStopDinamico) then
+          vStopDinamico := vMelhorPreco + vTrailingStepEf;
+      end;
+    end
+    // CORRIGIDO: BE usa Low para backtest fiel
+    else if (pUsarBE) and (not vBEAtivado) then
+    begin
+      if (Low <= (vPrecoEntrada - vBEAtual)) then
+      begin
+        vStopDinamico := vPrecoEntrada - vBEOffsetEf;
+        vBEAtivado    := true;
+      end;
+    end;
+
+    // Stop fixo
+    if (High >= (vPrecoEntrada + vStopAtual)) then
+    begin
+      vPLDia := vPLDia - vStopAtual;
+      ClosePosition;
+      vStopsDia     := vStopsDia + 1;
+      vBarraUltStop := CurrentBar;
+    end
+    // Stop dinâmico (BE/Trailing)
+    else if ((vBEAtivado or vTrailingAtivado) and (High >= vStopDinamico)) then
+    begin
+      vPLDia := vPLDia + (vPrecoEntrada - vStopDinamico);
+      ClosePosition;
+      vStopsDia     := vStopsDia + 1;
+      vBarraUltStop := CurrentBar;
+    end
+    // Gain
+    else if (Low <= (vPrecoEntrada - vGainAtual)) then
+    begin
+      vPLDia := vPLDia + vGainAtual;
+      ClosePosition;
+    end;
+  end;
+
+  // -------------------------------------------------
+  // Plots
+  // -------------------------------------------------
+  Plot(vMME200);
+  Plot2(vMME9);
+  Plot3(vMME21);
+
+  if (vBullOK) then
+    SetPlotColor(1, clGreen)
+  else if (vBearOK) then
+    SetPlotColor(1, clRed)
+  else if (vModoRev) then
+    SetPlotColor(1, clYellow)
+  else
+    SetPlotColor(1, clWhite);
+
+end;
