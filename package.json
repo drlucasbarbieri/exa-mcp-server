@@ -42,20 +42,20 @@
     "prepublishOnly": "npm run build:stdio"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
-    "agnost": "^0.1.10",
-    "axios": "^1.7.8",
-    "mcp-handler": "^1.0.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "agnost": "^0.2.0",
+    "axios": "^1.18.1",
+    "mcp-handler": "^1.1.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {
-    "@smithery/cli": "^1.4.4",
+    "@smithery/cli": "^4.11.1",
     "@types/node": "^20.11.24",
     "@upstash/ratelimit": "^2.0.8",
     "@upstash/redis": "^1.36.1",
     "tsx": "^4.7.0",
     "typescript": "^5.9.3",
-    "vercel": "^37.0.0"
+    "vercel": "^56.2.0"
   },
   "engines": {
     "node": ">=18.0.0"
